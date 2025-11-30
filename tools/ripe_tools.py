@@ -1,8 +1,8 @@
 from crewai.tools import tool
 import requests
+import re
 from netaddr import IPNetwork, IPSet
 import time
-import re
 from typing import List, Dict
 
 RIPE = "https://stat.ripe.net/data"
@@ -63,10 +63,10 @@ def fetch_country_prefixes(country: str = "IL") -> str:
 
 @tool
 def prefixes_by_isp(prefixes_list: str) -> str:
-    """Group a list of IP prefixes by their ASN owner (ISP). Input should be comma-separated CIDR strings."""
+    """Get ASN and ISP info for IP prefixes. Input: comma-separated CIDR prefixes or IPs."""
     try:
-        # Extract CIDR patterns
-        cidr_pattern = r'\b\d+\.\d+\.\d+\.\d+/\d+\b'
+        # Extract CIDR patterns or single IPs
+        cidr_pattern = r'\b\d+\.\d+\.\d+\.\d+(?:/\d+)?\b'
         matches = re.findall(cidr_pattern, prefixes_list)
 
         if matches:
@@ -75,72 +75,85 @@ def prefixes_by_isp(prefixes_list: str) -> str:
             prefixes = [p.strip() for p in prefixes_list.split(",") if p.strip()]
 
         if not prefixes:
-            return "ERROR: No valid CIDR prefixes found"
+            return "ERROR: No valid IP addresses or CIDR prefixes found"
 
-        output: Dict[str, List[str]] = {}
+        output: Dict[str, Dict] = {}
 
-        # Limit to first 5
-        for prefix in prefixes[:5]:
+        # Process each prefix/IP
+        for item in prefixes[:10]:  # Limit to first 10
             try:
-                # קודם כל, נסה network-info API
+                # חלץ את ה-IP הראשון מה-CIDR (אם זה CIDR)
+                ip = item.split('/')[0]
+
+                # השתמש ב-RIPE prefix-overview API
                 r = requests.get(
-                    f"{RIPE}/network-info/data.json",
-                    params={"resource": prefix},
-                    timeout=20,
+                    f"{RIPE}/prefix-overview/data.json",
+                    params={"resource": item},
+                    timeout=15,
                     headers=HEADERS
                 )
                 r.raise_for_status()
                 response_data = r.json()
 
+                asn = "UNKNOWN"
+                description = "Unknown ISP"
+
                 if "data" in response_data and response_data["data"]:
                     data = response_data["data"]
 
-                    # חפש ASN בנתוני network-info
-                    if "asns" in data and data["asns"]:
-                        asn_info = data["asns"][0]
-                        asn = asn_info.get("asn", "UNKNOWN")
-                        holder = asn_info.get("holder", "Unknown ISP")
-                        key = f"AS{asn}: {holder}"
-                    elif "holder" in data:
-                        key = data["holder"]
-                    else:
-                        key = "UNKNOWN"
+                    if isinstance(data, dict):
+                        # קבל את ה-ASN
+                        if "asns" in data and isinstance(data["asns"], list) and len(data["asns"]) > 0:
+                            asn_item = data["asns"][0]
+                            if isinstance(asn_item, dict):
+                                asn = str(asn_item.get("asn", "UNKNOWN"))
+                                description = str(asn_item.get("holder", "Unknown ISP"))
+                            elif isinstance(asn_item, str):
+                                asn = asn_item
 
-                    output.setdefault(key, []).append(prefix)
-                else:
-                    # אם network-info לא עובד, נסה prefix-overview
-                    r2 = requests.get(
-                        f"{RIPE}/prefix-overview/data.json",
-                        params={"resource": prefix},
-                        timeout=20,
-                        headers=HEADERS
-                    )
-                    r2.raise_for_status()
-                    response_data2 = r2.json()
-
-                    if "data" in response_data2 and response_data2["data"]:
-                        data2 = response_data2["data"]
-                        if data2.get("asns"):
-                            asn_info = data2["asns"][0]
-                            asn = asn_info.get("asn", "UNKNOWN")
-                            key = f"AS{asn}"
-                        else:
-                            key = "UNKNOWN"
-                        output.setdefault(key, []).append(prefix)
-                    else:
-                        output.setdefault("UNKNOWN", []).append(prefix)
+                # שמור את המידע
+                key = f"AS{asn}"
+                if key not in output:
+                    output[key] = {
+                        "description": description,
+                        "prefixes": []
+                    }
+                output[key]["prefixes"].append(item)
 
             except requests.exceptions.Timeout:
-                output.setdefault("ERROR_TIMEOUT", []).append(prefix)
-            except requests.exceptions.RequestException as re:
-                output.setdefault("ERROR_HTTP", []).append(f"{prefix}: {str(re)}")
+                key = "ERROR_TIMEOUT"
+                if key not in output:
+                    output[key] = {"description": "Request timed out", "prefixes": []}
+                output[key]["prefixes"].append(item)
+            except requests.exceptions.RequestException as req_err:
+                key = "ERROR_HTTP"
+                if key not in output:
+                    output[key] = {"description": str(req_err), "prefixes": []}
+                output[key]["prefixes"].append(item)
             except Exception as e:
-                output.setdefault("ERROR", []).append(f"{prefix}: {str(e)}")
+                key = "ERROR"
+                if key not in output:
+                    output[key] = {"description": str(e), "prefixes": []}
+                output[key]["prefixes"].append(item)
 
-            time.sleep(0.3)
+            time.sleep(0.2)
 
-        return str(output)
+        # פורמט התשובה בצורה קריאה
+        result_lines = []
+        for asn, info in sorted(output.items()):
+            prefixes = info.get("prefixes", [])
+            description = info.get("description", "")
+
+            if asn.startswith("AS"):
+                result_lines.append(f"\n{asn}: {description}")
+                result_lines.append(f"  Prefixes ({len(prefixes)}): {', '.join(prefixes)}")
+            else:
+                result_lines.append(f"\n{asn}: {description}")
+                result_lines.append(f"  Items ({len(prefixes)}): {', '.join(prefixes)}")
+
+        return "\n".join(result_lines) if result_lines else "No results found"
+
     except Exception as e:
-        return f"ERROR: Failed to group prefixes. {str(e)}"
+        return f"ERROR: Failed to get ASN info. {str(e)}"
 
 
