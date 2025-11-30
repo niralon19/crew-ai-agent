@@ -82,8 +82,9 @@ def prefixes_by_isp(prefixes_list: str) -> str:
         # Limit to first 5
         for prefix in prefixes[:5]:
             try:
+                # קודם כל, נסה network-info API
                 r = requests.get(
-                    f"{RIPE}/prefix-overview/data.json",
+                    f"{RIPE}/network-info/data.json",
                     params={"resource": prefix},
                     timeout=20,
                     headers=HEADERS
@@ -91,23 +92,52 @@ def prefixes_by_isp(prefixes_list: str) -> str:
                 r.raise_for_status()
                 response_data = r.json()
 
-                if "data" not in response_data:
-                    continue
+                if "data" in response_data and response_data["data"]:
+                    data = response_data["data"]
 
-                data = response_data["data"]
+                    # חפש ASN בנתוני network-info
+                    if "asns" in data and data["asns"]:
+                        asn_info = data["asns"][0]
+                        asn = asn_info.get("asn", "UNKNOWN")
+                        holder = asn_info.get("holder", "Unknown ISP")
+                        key = f"AS{asn}: {holder}"
+                    elif "holder" in data:
+                        key = data["holder"]
+                    else:
+                        key = "UNKNOWN"
 
-                if data and data.get("asns"):
-                    asn = data["asns"][0]["asn"]
-                    key = f"AS{asn}"
+                    output.setdefault(key, []).append(prefix)
                 else:
-                    key = "UNKNOWN"
+                    # אם network-info לא עובד, נסה prefix-overview
+                    r2 = requests.get(
+                        f"{RIPE}/prefix-overview/data.json",
+                        params={"resource": prefix},
+                        timeout=20,
+                        headers=HEADERS
+                    )
+                    r2.raise_for_status()
+                    response_data2 = r2.json()
 
-                output.setdefault(key, []).append(prefix)
+                    if "data" in response_data2 and response_data2["data"]:
+                        data2 = response_data2["data"]
+                        if data2.get("asns"):
+                            asn_info = data2["asns"][0]
+                            asn = asn_info.get("asn", "UNKNOWN")
+                            key = f"AS{asn}"
+                        else:
+                            key = "UNKNOWN"
+                        output.setdefault(key, []).append(prefix)
+                    else:
+                        output.setdefault("UNKNOWN", []).append(prefix)
 
+            except requests.exceptions.Timeout:
+                output.setdefault("ERROR_TIMEOUT", []).append(prefix)
+            except requests.exceptions.RequestException as re:
+                output.setdefault("ERROR_HTTP", []).append(f"{prefix}: {str(re)}")
             except Exception as e:
                 output.setdefault("ERROR", []).append(f"{prefix}: {str(e)}")
 
-            time.sleep(0.2)
+            time.sleep(0.3)
 
         return str(output)
     except Exception as e:
