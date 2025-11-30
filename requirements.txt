@@ -1,0 +1,9 @@
+crewai>=0.51.0
+langchain>=0.2.10
+langchain-openai
+langchain-google-genai
+google-generativeai
+requests
+netaddr
+crewai_tools
+langchain_core

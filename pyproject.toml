@@ -1,0 +1,25 @@
+[project]
+name = "crew-ip-project-gemini"
+version = "0.1.0"
+description = "Analyzes Israeli IPv4 space using RIPE APIs with CrewAI and Gemini LLM."
+requires-python = ">=3.11"
+
+# הוספת כל התלויות הנדרשות לפרויקט
+dependencies = [
+    "crewai[google-genai]>=0.51.0",
+    "langchain>=0.2.10",
+    "langchain-openai",
+    "langchain-google-genai",
+    "google-generativeai",
+    "requests",
+    "netaddr",
+    "crewai_tools",
+    "pydantic", # ודא ש-pydantic זמין לאימות
+    "typing_extensions", # נדרש לעיתים קרובות עם גרסאות חדשות של Pydantic/Python
+    "litellm",
+]
+
+# (אופציונלי) הגדרת כלי הבנייה
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
